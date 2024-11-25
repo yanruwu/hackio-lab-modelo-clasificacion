@@ -20,6 +20,28 @@ from category_encoders import TargetEncoder
 
 
 from sklearn.ensemble import RandomForestRegressor
+
+from imblearn.over_sampling import RandomOverSampler, SMOTE
+from imblearn.under_sampling import RandomUnderSampler
+from imblearn.combine import SMOTETomek
+
+from scipy.stats import chi2_contingency
+
+
+def detectar_orden_cat(lista_cat, var_respuesta, sig_level = 0.05):
+    for categoria in lista_cat:
+        print(f"Estamos evaluando la variable {categoria.upper()}")
+        df_crosstab = pd.crosstab(df[categoria], df[var_respuesta])
+        display(df_crosstab)
+        chi2, p, dof, expected = chi2_contingency(df_crosstab)
+
+        if p<sig_level:
+            print(f"Para la categoría {categoria.upper()} SÍ hay diferencias significativas, p = {p:.4f}")
+            display(pd.DataFrame(expected, index = df_crosstab.index, columns = df_crosstab.columns).round())
+        else:
+            print(f"Para la categoría {categoria.upper()} NO hay diferencias significativas, p = {p:.4f}\n")
+        print("--------"*10)
+
 def normalize_scaler(data):
     """
     Normaliza los datos de un DataFrame utilizando una escala centrada en la media y ajustada al rango.
