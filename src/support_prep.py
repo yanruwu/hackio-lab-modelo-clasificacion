@@ -28,7 +28,7 @@ from imblearn.combine import SMOTETomek
 from scipy.stats import chi2_contingency
 
 
-def detectar_orden_cat(lista_cat, var_respuesta, sig_level = 0.05):
+def detectar_orden_cat(df, lista_cat, var_respuesta, sig_level = 0.05):
     for categoria in lista_cat:
         print(f"Estamos evaluando la variable {categoria.upper()}")
         df_crosstab = pd.crosstab(df[categoria], df[var_respuesta])
