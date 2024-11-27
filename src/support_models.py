@@ -1,9 +1,11 @@
+import math
 import time
 import psutil
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
+import shap
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.linear_model import LogisticRegression
 from sklearn.tree import DecisionTreeClassifier
@@ -11,9 +13,28 @@ from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from xgboost import XGBClassifier
 from sklearn.metrics import (
     accuracy_score, precision_score, recall_score, f1_score, cohen_kappa_score,
-    roc_auc_score, confusion_matrix
+    roc_auc_score, confusion_matrix, roc_curve
 )
 from IPython.display import display
+
+def color_filas_por_modelo(row):
+    if row["method"] == "decision_tree":
+        return ["background-color: #e6b3e0; color: black"] * len(row)  
+    
+    elif row["method"] == "random_forest":
+        return ["background-color: #c2f0c2; color: black"] * len(row) 
+
+    elif row["method"] == "gradient_boosting":
+        return ["background-color: #ffd9b3; color: black"] * len(row)  
+
+    elif row["method"] == "xgboost":
+        return ["background-color: #f7b3c2; color: black"] * len(row)  
+
+    elif row["method"] == "logistic":
+        return ["background-color: #b3d1ff; color: black"] * len(row)  
+    
+    return ["color: black"] * len(row)
+
 
 class ClassificationModel:
     """
@@ -63,7 +84,7 @@ class ClassificationModel:
         models = {
             "logistic": LogisticRegression(random_state=self.random_state),
             "decision_tree": DecisionTreeClassifier(random_state=self.random_state),
-            "random_forest": RandomForestClassifier(random_state=self.random_state),
+            "random_forest": RandomForestClassifier(random_state=self.random_state, n_jobs=-1),
             "gradient_boosting": GradientBoostingClassifier(random_state=self.random_state),
             "xgboost": XGBClassifier(random_state=self.random_state, use_label_encoder=False, eval_metric='logloss')
         }
@@ -71,7 +92,7 @@ class ClassificationModel:
             raise ValueError(f"El modelo '{model_type}' no es válido. Elija uno de {list(models.keys())}")
         return models[model_type]
 
-    def train(self, model_type, params=None, scoring='accuracy'):
+    def train(self, model_type, params=None, scoring='accuracy', verbose = 0):
         """
         Entrena el modelo seleccionado con los datos de entrenamiento y calcula las métricas de evaluación.
 
@@ -85,7 +106,7 @@ class ClassificationModel:
         self.model = self._get_model(model_type)
         
         if params:
-            grid_search = GridSearchCV(self.model, param_grid=params, cv=5, scoring=scoring, n_jobs=-1)
+            grid_search = GridSearchCV(self.model, param_grid=params, cv=5, scoring=scoring, n_jobs=-1, verbose = verbose)
             grid_search.fit(self.X_train, self.y_train)
             self.model = grid_search.best_estimator_
             self.best_params = grid_search.best_params_
@@ -165,15 +186,82 @@ class ClassificationModel:
             print("Primero debes entrenar un modelo para graficar la matriz de confusión.")
             return
         
-        y_test_pred = self.model.predict(self.X_test)
-        cm = confusion_matrix(self.y_test, y_test_pred)
-
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=np.unique(self.y_test), yticklabels=np.unique(self.y_test))
-        plt.xlabel("Predicted")
-        plt.ylabel("Actual")
-        plt.title("Confusion Matrix")
+        trained_models = list(self.resultados.keys())
+        fig, axes = plt.subplots(ncols = 2, nrows = math.ceil(len(trained_models)/2), figsize = (10,6))
+        axes = axes.flat
+        for i, tm in enumerate(trained_models):
+            cm = confusion_matrix(self.y_test, self.resultados[tm]["pred_test"])
+            axes[i].set_title(f"Confusion Matrix of {tm}")
+            sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", xticklabels=np.unique(self.y_test), yticklabels=np.unique(self.y_test), ax = axes[i])
+            axes[i].set_ylabel("Actual")
+            axes[i].set_xlabel("Predicted")
+        plt.tight_layout()
+        if len(trained_models)%2 != 0:
+            plt.delaxes(axes[-1])
         plt.show()
+    
+    def plot_roc_curves(self):
+        """
+        Muestra las curvas ROC para los modelos entrenados.
+
+        Si ningún modelo ha sido entrenado, muestra un mensaje indicándolo.
+        """
+        if not self.resultados:
+            print("Primero debes entrenar al menos un modelo para graficar las curvas ROC.")
+            return
+        
+        plt.figure(figsize=(10, 8))
+        plt.subplot(1,2,1)
+        plt.grid(ls="--", lw=0.6, alpha=0.6)
+
+        for model_name, resultado in self.resultados.items():
+            modelo = resultado['mejor_modelo']
+            if hasattr(modelo, "predict_proba"):
+                prob_test = modelo.predict_proba(self.X_test)[:, 1]
+            else:
+                print(f"El modelo '{model_name}' no soporta la función predict_proba y no se puede graficar la curva ROC.")
+                continue
+
+            # Calcular fpr y tpr para la curva ROC
+            fpr, tpr, _ = roc_curve(self.y_test, prob_test)
+            auc_score = roc_auc_score(self.y_test, prob_test)
+
+            # Plotear la curva ROC
+            sns.lineplot(x=fpr, y=tpr, label=f"{model_name} (AUC: {auc_score:.2f})")
+
+        # Curva de referencia para un clasificador aleatorio
+        plt.plot([0, 1], [0, 1], color="red", linestyle="--", label="Random Classifier")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title("ROC Curves - Test")
+        plt.legend()
+
+        plt.subplot(1,2,2)
+        plt.grid(ls="--", lw=0.6, alpha=0.6)
+
+        for model_name, resultado in self.resultados.items():
+            modelo = resultado['mejor_modelo']
+            if hasattr(modelo, "predict_proba"):
+                prob_test = modelo.predict_proba(self.X_train)[:, 1]
+            else:
+                print(f"El modelo '{model_name}' no soporta la función predict_proba y no se puede graficar la curva ROC.")
+                continue
+
+            # Calcular fpr y tpr para la curva ROC
+            fpr, tpr, _ = roc_curve(self.y_train, prob_test)
+            auc_score = roc_auc_score(self.y_train, prob_test)
+
+            # Plotear la curva ROC
+            sns.lineplot(x=fpr, y=tpr, label=f"{model_name} (AUC: {auc_score:.2f})")
+
+        # Curva de referencia para un clasificador aleatorio
+        plt.plot([0, 1], [0, 1], color="red", linestyle="--", label="Random Classifier")
+        plt.xlabel("False Positive Rate")
+        plt.ylabel("True Positive Rate")
+        plt.title("ROC Curves - Train")
+        plt.legend()
+        plt.show()
+
     
     def get_best_params(self):
         """
